@@ -1,0 +1,39 @@
+# sync2connect configuration.
+#
+# Copy to config.yaml (or mount at /data/config.yaml in Docker) and fill in
+# your credentials. Every string value may reference an environment variable
+# with ${VAR_NAME} to keep secrets out of the file.
+
+# Directory where OAuth tokens and sync state are stored.
+# Defaults to $SYNC2CONNECT_STATE_DIR, then ./data (in Docker: /data).
+#state_dir: /data
+
+sync:
+  # How often to sync. Omit (or set to 0) to run a single pass and exit,
+  # e.g. when scheduling with cron instead.
+  interval: 1h
+
+  # How far back the very first sync reaches. Defaults to 720h (30 days).
+  #initial_lookback: 720h
+
+  # Each route copies data from one source provider to one destination.
+  routes:
+    - source: withings
+      destination: garmin
+
+providers:
+  withings:
+    # Create an application at https://developer.withings.com to get these.
+    client_id: ${WITHINGS_CLIENT_ID}
+    client_secret: ${WITHINGS_CLIENT_SECRET}
+    # Must exactly match the callback URL registered with your Withings app.
+    #redirect_uri: http://localhost:8484/callback
+    # Address the one-time `auth withings` callback server listens on.
+    #listen: localhost:8484
+
+  garmin:
+    # Your Garmin Connect account. Only used by `sync2connect auth garmin`;
+    # afterwards the stored tokens (valid ~1 year) are used. You can also
+    # omit these and type them when running the auth command.
+    email: ${GARMIN_EMAIL}
+    password: ${GARMIN_PASSWORD}
