@@ -1,0 +1,9 @@
+.git
+.github
+data/
+dist/
+*.md
+docker-compose.yml
+config.yaml
+config.example.yaml
+LICENSE

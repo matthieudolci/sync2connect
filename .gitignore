@@ -1,0 +1,8 @@
+# local runtime state (tokens, sync watermarks)
+/data/
+config.yaml
+
+# build output
+/dist/
+/sync2connect
+sync2connect.exe
