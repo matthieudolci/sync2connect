@@ -101,7 +101,12 @@ The config file is found via `-config`, `$SYNC2CONNECT_CONFIG`, or
 1. Create an app at <https://developer.withings.com> (a normal Withings
    account works).
 2. Set the callback URL to `http://localhost:8484/callback` (or whatever you
-   configure as `redirect_uri`).
+   configure as `redirect_uri`). Note: Withings only accepts localhost/HTTP
+   URLs for apps in *integration mode*, which caps the app at 10 users —
+   plenty for personal use. A *production mode* app must register an HTTPS
+   URL on port 443; in that case set `redirect_uri` accordingly and use
+   `sync2connect auth withings --manual` (the redirect page may 404 — just
+   paste the full URL from the browser's address bar when prompted).
 3. Put the client id/secret in the config and run
    `sync2connect auth withings`.
 

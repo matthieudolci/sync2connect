@@ -27,6 +27,11 @@ providers:
     client_id: ${WITHINGS_CLIENT_ID}
     client_secret: ${WITHINGS_CLIENT_SECRET}
     # Must exactly match the callback URL registered with your Withings app.
+    # Withings allows http://localhost URLs only for apps in integration
+    # mode (limited to 10 users) - which is fine for personal use. If your
+    # app is switched to production mode, register an HTTPS URL on port 443
+    # instead and authenticate with `auth withings --manual` (the page the
+    # browser lands on may 404; paste the full redirect URL when prompted).
     #redirect_uri: http://localhost:8484/callback
     # Address the one-time `auth withings` callback server listens on.
     #listen: localhost:8484

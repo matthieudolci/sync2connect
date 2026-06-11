@@ -17,13 +17,31 @@ import (
 	"github.com/matthieudolci/sync2connect/internal/provider"
 )
 
+// userID tolerates both encodings Withings uses for userid: a JSON number
+// in some responses and a JSON string in others.
+type userID string
+
+func (u *userID) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*u = userID(s)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return fmt.Errorf("userid is neither string nor number: %s", b)
+	}
+	*u = userID(n.String())
+	return nil
+}
+
 // token is the persisted OAuth2 state. Withings refresh tokens are single
 // use, so the file is rewritten after every refresh.
 type token struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
 	ExpiresAt    time.Time `json:"expires_at"`
-	UserID       int64     `json:"user_id"`
+	UserID       userID    `json:"user_id"`
 }
 
 // tokenResponse is the body of a successful v2/oauth2 requesttoken call.
@@ -31,7 +49,7 @@ type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int64  `json:"expires_in"`
-	UserID       int64  `json:"userid"`
+	UserID       userID `json:"userid"`
 }
 
 func (t tokenResponse) toToken() *token {
@@ -161,7 +179,7 @@ func (p *Provider) Authenticate(ctx context.Context, prompt provider.PromptFunc)
 	p.mu.Lock()
 	p.tok = tok
 	p.mu.Unlock()
-	fmt.Printf("Withings authentication succeeded (user id %d). Token saved to %s\n", tok.UserID, p.tokenPath)
+	fmt.Printf("Withings authentication succeeded (user id %s). Token saved to %s\n", tok.UserID, p.tokenPath)
 	return nil
 }
 
