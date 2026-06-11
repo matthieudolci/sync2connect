@@ -33,12 +33,21 @@ providers:
     # instead and authenticate with `auth withings --manual` (the page the
     # browser lands on may 404; paste the full redirect URL when prompted).
     #redirect_uri: http://localhost:8484/callback
-    # Address the one-time `auth withings` callback server listens on.
-    #listen: localhost:8484
+    # Address the OAuth callback server listens on. Inside Docker this must
+    # bind all interfaces so the published port can reach it.
+    listen: 0.0.0.0:8484
+    # When the sync loop starts without a stored token, print the
+    # authorization URL in the logs and wait for the browser callback
+    # instead of failing - no separate `auth withings` run needed. Open the
+    # logged URL in a browser on the machine the callback port is published
+    # on (see docker-compose.yml).
+    auto_auth: true
 
   garmin:
-    # Your Garmin Connect account. Only used by `sync2connect auth garmin`;
-    # afterwards the stored tokens (valid ~1 year) are used. You can also
-    # omit these and type them when running the auth command.
+    # Your Garmin Connect account. With these configured the app logs in by
+    # itself whenever no stored token exists (and again when it expires
+    # after ~1 year) - no `auth garmin` run needed. Accounts with MFA
+    # enabled cannot log in headless: run `sync2connect auth garmin`
+    # interactively once instead (the stored token is then reused).
     email: ${GARMIN_EMAIL}
     password: ${GARMIN_PASSWORD}

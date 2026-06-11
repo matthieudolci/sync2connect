@@ -10,6 +10,11 @@ services:
       WITHINGS_CLIENT_SECRET: ${WITHINGS_CLIENT_SECRET}
       GARMIN_EMAIL: ${GARMIN_EMAIL}
       GARMIN_PASSWORD: ${GARMIN_PASSWORD}
+    ports:
+      # Only used for the first-run Withings authorization callback (with
+      # auto_auth enabled); can be removed once /data/withings_token.json
+      # exists.
+      - "8484:8484"
     volumes:
       # Must contain config.yaml; tokens and sync state are written here.
       - ./data:/data

@@ -51,6 +51,10 @@ type Provider struct {
 	redirectURI  string
 	listen       string
 	manualAuth   bool
+	autoAuth     bool
+
+	// authStarted is a test hook invoked when the callback listener is up.
+	authStarted func(authURL, addr string)
 
 	apiBase      string
 	authorizeURL string
@@ -69,12 +73,14 @@ func New(cfg provider.Config) (provider.Provider, error) {
 	if clientID == "" || clientSecret == "" {
 		return nil, fmt.Errorf("withings: client_id and client_secret are required (create an app at https://developer.withings.com)")
 	}
+	autoAuth, _ := strconv.ParseBool(cfg.Settings.Get("auto_auth", "false"))
 	return &Provider{
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		redirectURI:  cfg.Settings.Get("redirect_uri", defaultRedirectURI),
 		listen:       cfg.Settings.Get("listen", defaultListen),
 		manualAuth:   cfg.ManualAuth,
+		autoAuth:     autoAuth,
 		apiBase:      strings.TrimRight(cfg.Settings.Get("api_url", defaultAPIBase), "/"),
 		authorizeURL: cfg.Settings.Get("authorize_url", defaultAuthorizeURL),
 		tokenPath:    filepath.Join(cfg.StateDir, "withings_token.json"),

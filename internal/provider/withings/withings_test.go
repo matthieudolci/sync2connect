@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -227,5 +228,70 @@ func TestCodeFromPrompt(t *testing.T) {
 	code, err = p.codeFromPrompt(prompt("rawcode123"), "st1")
 	if err != nil || code != "rawcode123" {
 		t.Fatalf("bare code: code=%q err=%v", code, err)
+	}
+}
+
+// TestFetchBodyAutoAuth verifies that with auto_auth enabled, a missing
+// token triggers the authorization flow inline and sync proceeds once the
+// browser callback arrives.
+func TestFetchBodyAutoAuth(t *testing.T) {
+	fake := &fakeWithings{t: t, pages: []string{
+		`{"status":0,"body":{"measuregrps":[]}}`,
+	}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	p, err := New(provider.Config{
+		Settings: provider.Settings{
+			"client_id":     "cid",
+			"client_secret": "csecret",
+			"api_url":       server.URL,
+			"auto_auth":     "true",
+			"listen":        "127.0.0.1:0",
+		},
+		StateDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wp := p.(*Provider)
+
+	// Simulate the user's browser: once the listener is up, follow the
+	// redirect with the code and the state from the auth URL.
+	wp.authStarted = func(authURL, addr string) {
+		go func() {
+			u, err := url.Parse(authURL)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			state := u.Query().Get("state")
+			resp, err := http.Get(fmt.Sprintf("http://%s/callback?code=the-code&state=%s", addr, state))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			resp.Body.Close()
+		}()
+	}
+
+	if _, err := wp.FetchBody(context.Background(), time.Unix(0, 0)); err != nil {
+		t.Fatalf("FetchBody with auto_auth: %v", err)
+	}
+	if _, err := os.Stat(wp.tokenPath); err != nil {
+		t.Fatalf("token file not created: %v", err)
+	}
+}
+
+// TestFetchBodyAutoAuthDisabled keeps the original behavior: a missing
+// token is an error pointing at the auth command.
+func TestFetchBodyAutoAuthDisabled(t *testing.T) {
+	server := httptest.NewServer((&fakeWithings{t: t}).handler())
+	defer server.Close()
+
+	p := newTestProvider(t, server) // auto_auth not set
+	_, err := p.FetchBody(context.Background(), time.Unix(0, 0))
+	if err == nil || !strings.Contains(err.Error(), "auth withings") {
+		t.Fatalf("expected not-authenticated error, got %v", err)
 	}
 }
