@@ -35,7 +35,9 @@ func (f *fakeWithings) handler() http.Handler {
 			if got := r.PostFormValue("refresh_token"); got != "refresh-old" {
 				f.t.Errorf("refresh_token = %q", got)
 			}
-			fmt.Fprint(w, `{"status":0,"body":{"access_token":"access-new","refresh_token":"refresh-new","expires_in":10800,"userid":42}}`)
+			// userid arrives as a string here and as a number below: the
+			// live API uses both encodings.
+			fmt.Fprint(w, `{"status":0,"body":{"access_token":"access-new","refresh_token":"refresh-new","expires_in":10800,"userid":"42"}}`)
 		case "authorization_code":
 			if got := r.PostFormValue("code"); got != "the-code" {
 				f.t.Errorf("code = %q", got)
