@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
@@ -112,31 +113,41 @@ func (p *Provider) Authenticate(ctx context.Context, prompt provider.PromptFunc)
 	}
 
 	mfaPrompt := func() (string, error) { return prompt("Garmin MFA code", false) }
-	ticket, err := p.ssoLogin(ctx, strings.TrimSpace(email), password, mfaPrompt)
+	tok, err := p.login(ctx, strings.TrimSpace(email), password, mfaPrompt)
 	if err != nil {
-		return err
-	}
-
-	consumer, err := p.consumerCredentials(ctx)
-	if err != nil {
-		return err
-	}
-	tok, err := p.fetchOAuth1Token(ctx, consumer, ticket)
-	if err != nil {
-		return err
-	}
-	if err := p.exchangeOAuth2(ctx, consumer, tok); err != nil {
 		return err
 	}
 
 	p.mu.Lock()
 	p.tok = tok
 	p.mu.Unlock()
-	if err := p.saveTokens(tok); err != nil {
-		return err
-	}
 	fmt.Printf("Garmin authentication succeeded. Tokens saved to %s\n", p.tokenPath)
 	return nil
+}
+
+// login performs the full SSO + OAuth1 + OAuth2 flow and persists the
+// resulting tokens. It does not touch p.tok or p.mu, so it is safe to call
+// while holding the provider lock.
+func (p *Provider) login(ctx context.Context, email, password string, mfaPrompt func() (string, error)) (*tokens, error) {
+	ticket, err := p.ssoLogin(ctx, email, password, mfaPrompt)
+	if err != nil {
+		return nil, err
+	}
+	consumer, err := p.consumerCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tok, err := p.fetchOAuth1Token(ctx, consumer, ticket)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.exchangeOAuth2(ctx, consumer, tok); err != nil {
+		return nil, err
+	}
+	if err := p.saveTokens(tok); err != nil {
+		return nil, err
+	}
+	return tok, nil
 }
 
 // PushBody encodes the measurements as a FIT weight file and uploads it.
@@ -221,14 +232,21 @@ func checkImportResult(raw []byte) error {
 }
 
 // accessToken returns a valid OAuth2 bearer token, re-exchanging the stored
-// OAuth1 token when the current one is expired or missing.
+// OAuth1 token when the current one is expired or missing. When no usable
+// tokens exist and credentials are configured, it logs in automatically
+// (headless; accounts with MFA still need `sync2connect auth garmin` once).
 func (p *Provider) accessToken(ctx context.Context) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.tok == nil {
 		tok, err := p.loadTokens()
 		if err != nil {
-			return "", err
+			if !errors.Is(err, fs.ErrNotExist) {
+				return "", err
+			}
+			if tok, err = p.autoLogin(ctx, err); err != nil {
+				return "", err
+			}
 		}
 		p.tok = tok
 	}
@@ -236,19 +254,45 @@ func (p *Provider) accessToken(ctx context.Context) (string, error) {
 		return p.tok.OAuth2AccessToken, nil
 	}
 	if p.tok.OAuth1Token == "" {
-		return "", errors.New("garmin is not authenticated yet, run `sync2connect auth garmin`")
+		tok, err := p.autoLogin(ctx, errors.New("garmin is not authenticated yet, run `sync2connect auth garmin`"))
+		if err != nil {
+			return "", err
+		}
+		p.tok = tok
+		return p.tok.OAuth2AccessToken, nil
 	}
 	consumer, err := p.consumerCredentials(ctx)
 	if err != nil {
 		return "", err
 	}
 	if err := p.exchangeOAuth2(ctx, consumer, p.tok); err != nil {
-		return "", fmt.Errorf("refreshing garmin token (run `sync2connect auth garmin` if this persists): %w", err)
+		// The OAuth1 token has likely expired (they last about a year);
+		// fall back to a fresh login when credentials are available.
+		tok, lerr := p.autoLogin(ctx, fmt.Errorf("refreshing garmin token (run `sync2connect auth garmin` if this persists): %w", err))
+		if lerr != nil {
+			return "", lerr
+		}
+		p.tok = tok
+		return p.tok.OAuth2AccessToken, nil
 	}
 	if err := p.saveTokens(p.tok); err != nil {
 		return "", err
 	}
 	return p.tok.OAuth2AccessToken, nil
+}
+
+// autoLogin attempts a headless login with the configured credentials,
+// returning cause unchanged when none are configured. Without an
+// interactive prompt, accounts requiring MFA fail with a clear error.
+func (p *Provider) autoLogin(ctx context.Context, cause error) (*tokens, error) {
+	if p.email == "" || p.password == "" {
+		return nil, cause
+	}
+	tok, err := p.login(ctx, strings.TrimSpace(p.email), p.password, nil)
+	if err != nil {
+		return nil, fmt.Errorf("garmin automatic login failed: %w", err)
+	}
+	return tok, nil
 }
 
 // fetchOAuth1Token trades the SSO ticket for a long-lived OAuth1 token.

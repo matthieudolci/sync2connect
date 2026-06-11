@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -62,14 +63,23 @@ func (t tokenResponse) toToken() *token {
 }
 
 // accessToken returns a valid access token, refreshing when it is expired,
-// about to expire, or a refresh is forced by the caller.
+// about to expire, or a refresh is forced by the caller. With auto_auth
+// enabled, a missing token triggers the authorization flow inline: the URL
+// is printed to the log and the callback listener waits until the user
+// authorizes in a browser.
 func (p *Provider) accessToken(ctx context.Context, force bool) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.tok == nil {
 		tok, err := p.loadToken()
 		if err != nil {
-			return "", err
+			if !p.autoAuth || !errors.Is(err, fs.ErrNotExist) {
+				return "", err
+			}
+			fmt.Println("No Withings token found - starting authorization; sync will continue once you have authorized.")
+			if tok, err = p.runAuthFlow(ctx, nil, 0); err != nil {
+				return "", fmt.Errorf("withings automatic authentication: %w", err)
+			}
 		}
 		p.tok = tok
 	}
@@ -137,9 +147,23 @@ func (p *Provider) saveToken(tok *token) error {
 // the redirect on a local listener and waits for the browser callback; with
 // manual auth it asks the user to paste the redirect URL or code instead.
 func (p *Provider) Authenticate(ctx context.Context, prompt provider.PromptFunc) error {
+	tok, err := p.runAuthFlow(ctx, prompt, 5*time.Minute)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.tok = tok
+	p.mu.Unlock()
+	return nil
+}
+
+// runAuthFlow performs the authorization-code flow and persists the token.
+// A zero timeout waits for the callback until ctx is done. It does not touch
+// p.tok or p.mu, so it is safe to call while holding the provider lock.
+func (p *Provider) runAuthFlow(ctx context.Context, prompt provider.PromptFunc, timeout time.Duration) (*token, error) {
 	stateBytes := make([]byte, 16)
 	if _, err := rand.Read(stateBytes); err != nil {
-		return err
+		return nil, err
 	}
 	state := hex.EncodeToString(stateBytes)
 
@@ -158,10 +182,10 @@ func (p *Provider) Authenticate(ctx context.Context, prompt provider.PromptFunc)
 	if p.manualAuth {
 		code, err = p.codeFromPrompt(prompt, state)
 	} else {
-		code, err = p.codeFromCallback(ctx, state)
+		code, err = p.codeFromCallback(ctx, state, timeout, authURL)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	body, err := p.requestToken(ctx, url.Values{
@@ -170,17 +194,14 @@ func (p *Provider) Authenticate(ctx context.Context, prompt provider.PromptFunc)
 		"redirect_uri": {p.redirectURI},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tok := body.toToken()
 	if err := p.saveToken(tok); err != nil {
-		return err
+		return nil, err
 	}
-	p.mu.Lock()
-	p.tok = tok
-	p.mu.Unlock()
 	fmt.Printf("Withings authentication succeeded (user id %s). Token saved to %s\n", tok.UserID, p.tokenPath)
-	return nil
+	return tok, nil
 }
 
 // codeFromPrompt accepts either the bare authorization code or the full
@@ -204,8 +225,9 @@ func (p *Provider) codeFromPrompt(prompt provider.PromptFunc, state string) (str
 }
 
 // codeFromCallback runs a one-shot HTTP server on the configured listen
-// address and waits for the OAuth redirect.
-func (p *Provider) codeFromCallback(ctx context.Context, state string) (string, error) {
+// address and waits for the OAuth redirect. A zero timeout waits until ctx
+// is done.
+func (p *Provider) codeFromCallback(ctx context.Context, state string, timeout time.Duration, authURL string) (string, error) {
 	redirect, err := url.Parse(p.redirectURI)
 	if err != nil {
 		return "", fmt.Errorf("invalid redirect_uri %q: %w", p.redirectURI, err)
@@ -220,6 +242,9 @@ func (p *Provider) codeFromCallback(ctx context.Context, state string) (string, 
 		return "", fmt.Errorf("starting callback listener on %s (use `auth withings --manual` on headless machines): %w", p.listen, err)
 	}
 	defer listener.Close()
+	if p.authStarted != nil {
+		p.authStarted(authURL, listener.Addr().String())
+	}
 
 	type result struct {
 		code string
@@ -254,12 +279,16 @@ func (p *Provider) codeFromCallback(ctx context.Context, state string) (string, 
 	defer server.Close()
 
 	fmt.Printf("Waiting for the OAuth callback on %s%s ...\n", p.listen, callbackPath)
+	var timeoutC <-chan time.Time
+	if timeout > 0 {
+		timeoutC = time.After(timeout)
+	}
 	select {
 	case r := <-results:
 		return r.code, r.err
 	case <-ctx.Done():
 		return "", fmt.Errorf("waiting for withings callback: %w", ctx.Err())
-	case <-time.After(5 * time.Minute):
+	case <-timeoutC:
 		return "", errors.New("withings: timed out waiting for the OAuth callback")
 	}
 }

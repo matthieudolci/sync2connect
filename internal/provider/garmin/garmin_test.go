@@ -25,6 +25,9 @@ type fakeGarmin struct {
 	uploadCode  int
 	exchanges   int
 	failuresMsg string
+	// rejectExchangeToken makes the OAuth2 exchange return 401 for this
+	// OAuth1 token, simulating an expired token.
+	rejectExchangeToken string
 }
 
 func (f *fakeGarmin) handler() http.Handler {
@@ -76,8 +79,13 @@ func (f *fakeGarmin) handler() http.Handler {
 		fmt.Fprint(w, "oauth_token=ot-1&oauth_token_secret=os-1")
 	})
 	mux.HandleFunc("/oauth-service/oauth/exchange/user/2.0", func(w http.ResponseWriter, r *http.Request) {
-		f.exchanges++
 		auth := r.Header.Get("Authorization")
+		if f.rejectExchangeToken != "" && strings.Contains(auth, fmt.Sprintf("oauth_token=%q", f.rejectExchangeToken)) {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"token expired"}`)
+			return
+		}
+		f.exchanges++
 		if !strings.Contains(auth, `oauth_token="ot-1"`) {
 			f.t.Errorf("exchange missing oauth1 token: %q", auth)
 		}
@@ -282,5 +290,63 @@ func TestPushWithoutAuth(t *testing.T) {
 	err := p.PushBody(context.Background(), []model.BodyMeasurement{{Timestamp: time.Now(), WeightKg: 79}})
 	if err == nil || !strings.Contains(err.Error(), "auth garmin") {
 		t.Fatalf("expected not-authenticated error, got %v", err)
+	}
+}
+
+// TestPushAutoLogin verifies that with credentials configured, a missing
+// token file triggers a headless login during PushBody.
+func TestPushAutoLogin(t *testing.T) {
+	fake := &fakeGarmin{t: t}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	p := newTestProvider(t, server, "user@example.com", "hunter2")
+	err := p.PushBody(context.Background(), []model.BodyMeasurement{{Timestamp: time.Now(), WeightKg: 80}})
+	if err != nil {
+		t.Fatalf("PushBody with auto-login: %v", err)
+	}
+	if len(fake.uploads) != 1 {
+		t.Fatalf("uploads = %d, want 1", len(fake.uploads))
+	}
+	if _, err := os.Stat(p.tokenPath); err != nil {
+		t.Fatalf("token file not created: %v", err)
+	}
+}
+
+// TestPushAutoLoginMFA: MFA accounts cannot log in headless and must get a
+// clear error pointing at the interactive auth command.
+func TestPushAutoLoginMFA(t *testing.T) {
+	fake := &fakeGarmin{t: t, requireMFA: true}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	p := newTestProvider(t, server, "user@example.com", "hunter2")
+	err := p.PushBody(context.Background(), []model.BodyMeasurement{{Timestamp: time.Now(), WeightKg: 80}})
+	if err == nil || !strings.Contains(err.Error(), "MFA") {
+		t.Fatalf("expected MFA error, got %v", err)
+	}
+}
+
+// TestPushAutoReloginOnDeadOAuth1 verifies that when the stored OAuth1
+// token is rejected (expired after ~a year), a fresh login happens
+// automatically when credentials are configured.
+func TestPushAutoReloginOnDeadOAuth1(t *testing.T) {
+	fake := &fakeGarmin{t: t, rejectExchangeToken: "ot-dead"}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	p := newTestProvider(t, server, "user@example.com", "hunter2")
+	stored := tokens{OAuth1Token: "ot-dead", OAuth1Secret: "os-dead"}
+	raw, _ := json.Marshal(stored)
+	if err := os.WriteFile(p.tokenPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := p.PushBody(context.Background(), []model.BodyMeasurement{{Timestamp: time.Now(), WeightKg: 80}})
+	if err != nil {
+		t.Fatalf("PushBody with expired oauth1: %v", err)
+	}
+	if len(fake.uploads) != 1 {
+		t.Fatalf("uploads = %d, want 1", len(fake.uploads))
 	}
 }

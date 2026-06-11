@@ -52,21 +52,31 @@ Images are published to GitHub Container Registry for `linux/amd64` and
 ```sh
 mkdir -p data
 cp config.example.yaml data/config.yaml   # edit it
-
-# one-time authentication (interactive)
-docker run --rm -it -v ./data:/data --env-file .env \
-  ghcr.io/matthieudolci/sync2connect:latest auth withings --manual
-docker run --rm -it -v ./data:/data --env-file .env \
-  ghcr.io/matthieudolci/sync2connect:latest auth garmin
-
-# run the sync loop
 docker compose up -d
+docker compose logs -f                    # follow the first start
 ```
 
-See [docker-compose.yml](docker-compose.yml). The container expects the
-config at `/data/config.yaml` and writes tokens/state to `/data`. It runs as
-a non-root user (uid 65532), so make sure the mounted directory is writable:
-`chown -R 65532:65532 data` (or run with `--user "$(id -u)"`).
+On the first start the container bootstraps its own credentials:
+
+- **Garmin** logs in automatically with the configured email/password and
+  stores a token valid for about a year (it re-logs-in by itself when that
+  expires). Accounts with **MFA** cannot log in headless — run
+  `docker compose run --rm sync2connect auth garmin` once instead; the
+  stored token is then reused.
+- **Withings** requires one browser approval (OAuth consent — there is no
+  credentials-only way around it). With `auto_auth: true` in the config the
+  container prints the authorization URL in its logs and waits; open it in
+  a browser **on the docker host** (the redirect goes to `localhost:8484`,
+  which compose publishes into the container). Syncing starts the moment
+  you approve. Alternatively run
+  `docker compose run --rm sync2connect auth withings --manual` from
+  anywhere and paste the redirect URL.
+
+Subsequent starts need no interaction at all — tokens live in the `./data`
+volume. See [docker-compose.yml](docker-compose.yml). The container expects
+the config at `/data/config.yaml` and writes tokens/state to `/data`. It
+runs as a non-root user (uid 65532), so make sure the mounted directory is
+writable: `chown -R 65532:65532 data` (or run with `--user "$(id -u)"`).
 
 `latest` follows tagged releases; the `main` tag follows the main branch.
 
