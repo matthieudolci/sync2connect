@@ -78,6 +78,15 @@ the config at `/data/config.yaml` and writes tokens/state to `/data`. It
 runs as a non-root user (uid 65532), so make sure the mounted directory is
 writable: `chown -R 65532:65532 data` (or run with `--user "$(id -u)"`).
 
+### Unraid
+
+The `PUID`/`PGID` environment variables used by linuxserver.io images have
+no effect on this image (it is distroless, with no init process to remap
+users). Use Docker's native user mapping instead: add `--user 99:100` to
+the template's **Extra Parameters**. The app then runs as `nobody:users`,
+matching Unraid's default appdata ownership, so no chown is needed and the
+"New Permissions" tool won't break it.
+
 `latest` follows tagged releases; the `main` tag follows the main branch.
 
 ## Configuration
