@@ -29,11 +29,28 @@ type Store struct {
 	data fileData
 }
 
+// EnsureWritable creates dir if needed and verifies the process can write
+// to it, so misconfigured permissions surface at startup instead of after
+// an OAuth flow has already consumed the user's authorization.
+func EnsureWritable(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("creating state dir: %w", err)
+	}
+	probe := filepath.Join(dir, ".writable")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		return fmt.Errorf("state directory %s is not writable by uid %d "+
+			"(in Docker: `chown -R 65532:65532` the mounted volume, or run the container with `user: \"$(id -u)\"`): %w",
+			dir, os.Getuid(), err)
+	}
+	os.Remove(probe)
+	return nil
+}
+
 // Open loads (or initializes) the state file inside dir, creating the
 // directory if needed.
 func Open(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("creating state dir: %w", err)
+	if err := EnsureWritable(dir); err != nil {
+		return nil, err
 	}
 	s := &Store{
 		path: filepath.Join(dir, "state.json"),

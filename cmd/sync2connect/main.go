@@ -118,8 +118,8 @@ func runAuth(ctx context.Context, configPath string, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
-		return fmt.Errorf("creating state dir: %w", err)
+	if err := state.EnsureWritable(cfg.StateDir); err != nil {
+		return err
 	}
 
 	prov, err := provider.New(name, provider.Config{
